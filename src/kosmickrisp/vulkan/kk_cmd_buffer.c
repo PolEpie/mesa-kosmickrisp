@@ -167,6 +167,12 @@ kk_reset_cmd_buffer_internal(struct kk_cmd_buffer *cmd)
 
    cmd->uploader.bo = NULL;
    cmd->uploader.offset = 0;
+   /* A drawable pending present on a command buffer that gets reset was never
+    * presented; give it back to the layer (see kk_encode_drawable_present). */
+   if (cmd->drawable) {
+      mtl_release(cmd->drawable);
+      cmd->drawable = NULL;
+   }
 
    memset(&cmd->state, 0, sizeof(cmd->state));
    cmd->uses_heap = false;
