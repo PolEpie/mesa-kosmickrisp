@@ -2456,10 +2456,13 @@ predeclare_ssa_values(struct nir_to_msl_ctx *ctx, nir_function_impl *impl)
             const char *type = msl_type_for_def(ctx->types, def);
             if (!type)
                continue;
-            if (msl_def_is_sampler(ctx, def)) {
-               P_IND(ctx, "%s t%u;\n", type, def->index);
-            } else
-               P_IND(ctx, "%s t%u = %s(0);\n", type, def->index, type);
+            /* No initialiser: these are SSA defs, so dominance guarantees
+             * every one is written before it is read.  The dummy "= T(0)" cost
+             * ~40% of the Metal front-end's compile time on large shaders
+             * (30k dead stores clang has to build IR for and then delete).
+             * Registers (r%%d, emitted in emit_reg_decl) still need theirs.
+             */
+            P_IND(ctx, "%s t%u;\n", type, def->index);
          }
       }
    }
