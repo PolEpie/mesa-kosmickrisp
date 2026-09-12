@@ -356,6 +356,7 @@ fail_mem_cache:
       dev->has_queue = false;
    }
 fail_vab_memory:
+   mtl_release(dev->residency_set.snapshot);
    mtl_release(dev->residency_set.handle);
    simple_mtx_destroy(&dev->residency_set.mutex);
 fail_compiler:
@@ -407,6 +408,7 @@ kk_DestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
    simple_mtx_destroy(&dev->alloc_sets.mutex);
 
    /* Release the residency set last once all BOs are released. */
+   mtl_release(dev->residency_set.snapshot);
    mtl_release(dev->residency_set.handle);
    simple_mtx_destroy(&dev->residency_set.mutex);
 
@@ -477,6 +479,7 @@ init_residency:
       free(set);
       return NULL;
    }
+   set->residency_snapshots = UTIL_DYNARRAY_INIT;
    return set;
 }
 
@@ -486,6 +489,9 @@ kk_device_recycle_alloc_set(struct kk_alloc_set *set)
    struct kk_device *dev = set->dev;
    mtl_release(set->recording_residency);
    set->recording_residency = NULL;
+   util_dynarray_foreach(&set->residency_snapshots, mtl_residency_set *, snapshot)
+      mtl_release(*snapshot);
+   util_dynarray_fini(&set->residency_snapshots);
    if (set->cmd_bufs_used > KK_ALLOC_SET_RECYCLE_CMD_BUFS) {
       for (unsigned i = 0; i < ARRAY_SIZE(set->allocators); i++)
          mtl_release(set->allocators[i]);
@@ -509,11 +515,33 @@ kk_device_recycle_alloc_set(struct kk_alloc_set *set)
    }
 }
 
+/* Each returned reference is owned by a recording through GPU completion.
+ * Never mutate a published snapshot: resource removal must not change residency
+ * for command buffers which are already recorded or executing. */
+mtl_residency_set *
+kk_device_acquire_residency_snapshot(struct kk_device *dev)
+{
+   simple_mtx_lock(&dev->residency_set.mutex);
+   if (!dev->residency_set.snapshot) {
+      mtl_residency_set *snapshot = mtl_new_residency_set(dev->mtl_handle);
+      if (snapshot) {
+         mtl_residency_set_copy_allocations(snapshot, dev->residency_set.handle);
+         mtl_residency_set_commit(snapshot);
+         dev->residency_set.snapshot = snapshot;
+      }
+   }
+   mtl_residency_set *snapshot = mtl_retain(dev->residency_set.snapshot);
+   simple_mtx_unlock(&dev->residency_set.mutex);
+   return snapshot;
+}
+
 void
 kk_device_add_heap_to_residency_set(struct kk_device *dev, mtl_heap *heap)
 {
    simple_mtx_lock(&dev->residency_set.mutex);
    mtl_residency_set_add_allocation(dev->residency_set.handle, heap);
+   mtl_release(dev->residency_set.snapshot);
+   dev->residency_set.snapshot = NULL;
    simple_mtx_unlock(&dev->residency_set.mutex);
 }
 
@@ -522,6 +550,8 @@ kk_device_remove_heap_from_residency_set(struct kk_device *dev, mtl_heap *heap)
 {
    simple_mtx_lock(&dev->residency_set.mutex);
    mtl_residency_set_remove_allocation(dev->residency_set.handle, heap);
+   mtl_release(dev->residency_set.snapshot);
+   dev->residency_set.snapshot = NULL;
    simple_mtx_unlock(&dev->residency_set.mutex);
 }
 
@@ -530,6 +560,8 @@ kk_device_add_buffer_to_residency_set(struct kk_device *dev, mtl_buffer *buffer)
 {
    simple_mtx_lock(&dev->residency_set.mutex);
    mtl_residency_set_add_allocation(dev->residency_set.handle, buffer);
+   mtl_release(dev->residency_set.snapshot);
+   dev->residency_set.snapshot = NULL;
    simple_mtx_unlock(&dev->residency_set.mutex);
 }
 
@@ -539,6 +571,8 @@ kk_device_remove_buffer_from_residency_set(struct kk_device *dev,
 {
    simple_mtx_lock(&dev->residency_set.mutex);
    mtl_residency_set_remove_allocation(dev->residency_set.handle, buffer);
+   mtl_release(dev->residency_set.snapshot);
+   dev->residency_set.snapshot = NULL;
    simple_mtx_unlock(&dev->residency_set.mutex);
 }
 
@@ -548,6 +582,8 @@ kk_device_add_texture_to_residency_set(struct kk_device *dev,
 {
    simple_mtx_lock(&dev->residency_set.mutex);
    mtl_residency_set_add_allocation(dev->residency_set.handle, texture);
+   mtl_release(dev->residency_set.snapshot);
+   dev->residency_set.snapshot = NULL;
    simple_mtx_unlock(&dev->residency_set.mutex);
 }
 
@@ -557,6 +593,8 @@ kk_device_remove_texture_from_residency_set(struct kk_device *dev,
 {
    simple_mtx_lock(&dev->residency_set.mutex);
    mtl_residency_set_remove_allocation(dev->residency_set.handle, texture);
+   mtl_release(dev->residency_set.snapshot);
+   dev->residency_set.snapshot = NULL;
    simple_mtx_unlock(&dev->residency_set.mutex);
 }
 

@@ -32,6 +32,8 @@ struct vk_pipeline_cache;
 struct kk_residency_set {
    simple_mtx_t mutex;
    mtl_residency_set *handle;
+   /* Committed and immutable; invalidated on any membership change. */
+   mtl_residency_set *snapshot;
 };
 
 struct mtl_sampler_packed {
@@ -92,6 +94,8 @@ struct kk_alloc_set {
    uint32_t cmd_bufs_used;
    /* Immutable after recording; retained through GPU completion. */
    mtl_residency_set *recording_residency;
+   /* Owned references, one per ended Metal command buffer. */
+   struct util_dynarray residency_snapshots;
 };
 
 struct kk_device {
@@ -141,6 +145,7 @@ VkResult kk_device_init_meta(struct kk_device *dev);
 void kk_device_finish_meta(struct kk_device *dev);
 VkResult kk_device_init_lib(struct kk_device *dev);
 void kk_device_finish_lib(struct kk_device *dev);
+mtl_residency_set *kk_device_acquire_residency_snapshot(struct kk_device *dev);
 struct kk_alloc_set *kk_device_acquire_alloc_set(struct kk_device *dev);
 /* GPU must be done with the set. Resets it for reuse or frees it if the last
  * recording was large enough to have bloated its pools. */

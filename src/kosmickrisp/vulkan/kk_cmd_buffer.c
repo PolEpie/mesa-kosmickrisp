@@ -248,16 +248,9 @@ kk_EndCommandBuffer(VkCommandBuffer commandBuffer)
    /* Call twice since post_gfx will be moved to pre_gfx but not ended. */
    cs_end(cmd);
    cs_end(cmd);
-   /* Freeze allocation residency for this recording. The shared device set may
-    * change while the GPU is still executing these commands. */
-   if (cmd->alloc_set) {
-      struct kk_device *dev = kk_cmd_buffer_device(cmd);
-      simple_mtx_lock(&dev->residency_set.mutex);
-      mtl_residency_set_copy_allocations(cmd->alloc_set->recording_residency,
-                                        dev->residency_set.handle);
-      simple_mtx_unlock(&dev->residency_set.mutex);
+   /* Recording-local upload buffers are independent of the shared snapshots. */
+   if (cmd->alloc_set)
       mtl_residency_set_commit(cmd->alloc_set->recording_residency);
-   }
 
    return vk_command_buffer_end(&cmd->vk);
 }
@@ -415,6 +408,18 @@ kk_stop_encoder(struct kk_cmd_buffer *cmd, struct kk_encoder_state *es)
    }
 
    util_dynarray_clear(&es->ts_resolves);
+
+   /* All resources referenced by this encoder have now been recorded. Capture
+    * device membership before ending the Metal command buffer; later changes
+    * create a new snapshot rather than modifying this one. */
+   mtl_residency_set *snapshot =
+      kk_device_acquire_residency_snapshot(kk_cmd_buffer_device(cmd));
+   if (snapshot) {
+      mtl_command_buffer_use_residency_set(es->cmd_buf, snapshot);
+      util_dynarray_append(&cmd->alloc_set->residency_snapshots, snapshot);
+   } else {
+      vk_command_buffer_set_error(&cmd->vk, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+   }
 
    mtl_end_command_buffer(es->cmd_buf);
 
