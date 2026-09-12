@@ -1545,26 +1545,43 @@ intrinsic_to_msl(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr)
       src_to_msl(ctx, &instr->src[0]);
       P(ctx, ");\n");
       break;
-   case nir_intrinsic_load_scratch:
-      P(ctx, "*(thread %s*)&scratch[",
-        msl_type_for_def(ctx->types, &instr->def));
+   case nir_intrinsic_load_scratch: {
+      const char *type = msl_type_for_def(ctx->types, &instr->def);
+      bool vector = instr->def.num_components > 1;
+      if (vector)
+         P(ctx, "%s(", type);
+      P(ctx, "*(thread %s%s*)&scratch[", vector ? "packed_" : "", type);
       src_to_msl(ctx, &instr->src[0]);
-      P(ctx, "];\n");
+      P(ctx, vector ? "]);\n" : "];\n");
       break;
-   case nir_intrinsic_store_scratch:
-      P_IND(ctx, "(*(thread %s*)&scratch[",
-            msl_type_for_src(ctx->types, &instr->src[0]));
-      src_to_msl(ctx, &instr->src[1]);
-      P(ctx, "])");
-      writemask_to_msl(ctx, nir_intrinsic_write_mask(instr),
-                       instr->num_components);
-      P(ctx, " = ");
-      src_to_msl(ctx, &instr->src[0]);
-      if (instr->src[0].ssa->num_components > 1)
-         writemask_to_msl(ctx, nir_intrinsic_write_mask(instr),
-                          instr->num_components);
-      P(ctx, ";\n");
+   }
+   case nir_intrinsic_store_scratch: {
+      const char *type = msl_type_for_src(ctx->types, &instr->src[0]);
+      unsigned components = instr->num_components;
+      unsigned mask = nir_intrinsic_write_mask(instr);
+      bool vector = components > 1;
+      /* Scratch has scalar alignment, including 12-byte vec3 array strides.
+       * Packed vectors preserve that layout. Partial stores use components
+       * individually because packed vectors do not support vector swizzles. */
+      bool full = mask == BITFIELD_MASK(components);
+      unsigned stores = full ? 1 : components;
+      for (unsigned i = 0; i < stores; i++) {
+         if (!full && !(mask & BITFIELD_BIT(i)))
+            continue;
+         P_IND(ctx, "(*(thread %s%s*)&scratch[",
+               vector ? "packed_" : "", type);
+         src_to_msl(ctx, &instr->src[1]);
+         P(ctx, "])");
+         if (!full)
+            P(ctx, ".%c", "xyzw"[i]);
+         P(ctx, " = ");
+         src_to_msl(ctx, &instr->src[0]);
+         if (!full)
+            P(ctx, ".%c", "xyzw"[i]);
+         P(ctx, ";\n");
+      }
       break;
+   }
    case nir_intrinsic_load_texture_handle_kk:
    case nir_intrinsic_load_depth_texture_kk:
       P(ctx, "*(constant ");
