@@ -171,7 +171,7 @@ struct kk_graphics_state {
       /* If enabled, index of the current occlusion query in the occlusion heap.
        * There can only be one active at a time (hardware constraint).
        */
-      uint16_t index;
+      uint32_t index;
    } occlusion;
 
    /* Index buffer */
