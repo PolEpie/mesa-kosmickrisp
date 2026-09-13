@@ -220,7 +220,11 @@ kk_reset_cmd_buffer(struct vk_command_buffer *vk_cmd_buffer,
    vk_command_buffer_reset(&cmd->vk);
    kk_reset_cmd_buffer_internal(cmd);
    cmd->submitted = false;
-   cmd->one_time_submit = false;
+   cmd->skip_enqueue = false;
+   cmd->pass_count = 0;
+   cmd->impure = false;
+   cmd->merge_replay = false;
+   cmd->pass_suspended = false;
 }
 
 const struct vk_command_buffer_ops kk_cmd_buffer_ops = {
@@ -237,8 +241,6 @@ kk_BeginCommandBuffer(VkCommandBuffer commandBuffer,
 
    kk_reset_cmd_buffer(&cmd->vk, 0u);
    vk_command_buffer_begin(&cmd->vk, pBeginInfo);
-   cmd->one_time_submit =
-      pBeginInfo->flags & VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 
    return VK_SUCCESS;
 }
@@ -248,6 +250,8 @@ kk_EndCommandBuffer(VkCommandBuffer commandBuffer)
 {
    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
 
+   if (cmd->pass_suspended)
+      kk_end_rendering_now(cmd);
    /* Call twice since post_gfx will be moved to pre_gfx but not ended. */
    cs_end(cmd);
    cs_end(cmd);
@@ -361,6 +365,8 @@ static void
 kk_start_compute_encoder(struct kk_cmd_buffer *cmd, bool pre_gfx)
 {
    struct kk_encoder_state *es = pre_gfx ? cmd->pre_gfx : cmd->post_gfx;
+   /* Compute/blit work needs its own encoder: not a pure single pass. */
+   cmd->impure = true;
 
    es->cmd_buf = mtl_new_command_buffer(kk_cmd_buffer_device(cmd)->mtl_handle);
    mtl_begin_command_buffer(es->cmd_buf, es->allocator);
@@ -377,6 +383,10 @@ kk_start_compute_encoder(struct kk_cmd_buffer *cmd, bool pre_gfx)
 mtl_compute_encoder *
 cs_get_compute(struct kk_cmd_buffer *cmd, bool pre_gfx)
 {
+   /* Compute or blit work between merged passes came after the pass ended in
+    * the source command buffer; keep that order. */
+   if (cmd->pass_suspended)
+      kk_end_rendering_now(cmd);
    kk_cmd_ensure_alloc_set(cmd);
    mtl_compute_encoder *encoder;
    /* If we are not inside a render, we can just take pre_gfx. */
@@ -534,6 +544,13 @@ kk_CmdPipelineBarrier2(VkCommandBuffer commandBuffer,
 {
    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
 
+   /* A barrier recorded between two merged passes was outside any render pass
+    * in the source command buffers and relied on the encoder-end barrier. Give
+    * it that: end the suspended pass instead of treating it as an in-pass
+    * barrier (which only orders vertex before fragment). */
+   if (cmd->pass_suspended)
+      kk_end_rendering_now(cmd);
+
    /* TODO_KOSMICKRISP Lighten barriers according to the actual requested
     * barrier. To take advantage of this we need to remove the chaining of
     * encoders. */
@@ -546,6 +563,7 @@ kk_CmdPipelineBarrier2(VkCommandBuffer commandBuffer,
           kk_barrier_requires_encoder_split(cmd, pDependencyInfo)) {
          kk_apply_attachment_store_ops(cmd, true);
          cs_end(cmd);
+         cmd->impure = true;
          cs_start_render(cmd);
       } else
          mtl_barrier_after_encoder_stages(cmd->gfx.encoder, MTL_STAGE_VERTEX,

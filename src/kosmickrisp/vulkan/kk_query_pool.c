@@ -273,6 +273,7 @@ kk_CmdResetQueryPool(VkCommandBuffer commandBuffer, VkQueryPool queryPool,
                      uint32_t firstQuery, uint32_t queryCount)
 {
    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
+   cmd->impure = true;
    VK_FROM_HANDLE(kk_query_pool, pool, queryPool);
 
    assert(cmd->gfx.encoder == NULL);
@@ -338,6 +339,7 @@ kk_CmdWriteTimestamp2(VkCommandBuffer commandBuffer,
                       uint32_t query)
 {
    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
+   cmd->impure = true;
    VK_FROM_HANDLE(kk_query_pool, pool, queryPool);
    struct kk_device *dev = kk_cmd_buffer_device(cmd);
    assert(kk_pool_is_ts(pool) && pool->ts.heap);
@@ -411,6 +413,7 @@ kk_CmdBeginQuery(VkCommandBuffer commandBuffer, VkQueryPool queryPool,
                  uint32_t query, VkQueryControlFlags flags)
 {
    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
+   cmd->impure = true;
    VK_FROM_HANDLE(kk_query_pool, pool, queryPool);
    cmd->state.gfx.occlusion.mode = flags & VK_QUERY_CONTROL_PRECISE_BIT
                                       ? MTL_VISIBILITY_RESULT_MODE_COUNTING
@@ -425,6 +428,7 @@ kk_CmdEndQuery(VkCommandBuffer commandBuffer, VkQueryPool queryPool,
                uint32_t query)
 {
    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
+   cmd->impure = true;
    VK_FROM_HANDLE(kk_query_pool, pool, queryPool);
    cmd->state.gfx.occlusion.mode = MTL_VISIBILITY_RESULT_MODE_DISABLED;
    cmd->state.gfx.dirty |= KK_DIRTY_OCCLUSION;
@@ -545,6 +549,7 @@ kk_CmdCopyQueryPoolResultsToMemoryKHR(
    VkAddressCommandFlagsKHR dstFlags, VkQueryResultFlags flags)
 {
    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
+   cmd->impure = true;
    VK_FROM_HANDLE(kk_query_pool, pool, queryPool);
    struct kk_device *dev = kk_cmd_buffer_device(cmd);
 
