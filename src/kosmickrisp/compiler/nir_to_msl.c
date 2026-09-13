@@ -1373,6 +1373,46 @@ intrinsic_to_msl(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr)
       }
       break;
    }
+   case nir_intrinsic_load_global_bounded: {
+      /* Robust SSBO load: `(offset + size - 1) < bound ? load : 0` per
+       * component, same predicate nir_lower_explicit_io uses for its if/phi
+       * form, without the control flow. */
+      enum gl_access_qualifier access = nir_intrinsic_access(instr);
+      const char *type = msl_type_for_def(ctx->types, &instr->def);
+      const char *scalar = msl_scalar_type_for_def(ctx->types, &instr->def);
+      const char *qualifier = global_access_qualifier(ctx, access);
+      if (ctx->shader->info.stage == MESA_SHADER_FRAGMENT &&
+          (access & ACCESS_NON_WRITEABLE) && (access & ACCESS_CAN_REORDER) &&
+          !(access & (ACCESS_COHERENT | ACCESS_VOLATILE | ACCESS_ATOMIC)))
+         qualifier = "constant";
+      const unsigned n = instr->def.num_components;
+      const unsigned sz = instr->def.bit_size / 8;
+      if (n > 1)
+         P(ctx, "%s(", type);
+      for (unsigned i = 0; i < n; i++) {
+         if (i)
+            P(ctx, ", ");
+         P(ctx, "(");
+         src_to_msl(ctx, &instr->src[1]);
+         P(ctx, " + uint(%uu)) < ", i * sz + sz - 1);
+         src_to_msl(ctx, &instr->src[2]);
+         P(ctx, " ? ");
+         if (access & ACCESS_ATOMIC) {
+            P(ctx, "atomic_load_explicit((%s atomic_%s*)(", qualifier, scalar);
+         } else {
+            P(ctx, "*(%s %s*)(", qualifier, scalar);
+         }
+         src_to_msl(ctx, &instr->src[0]);
+         P(ctx, " + ");
+         src_to_msl(ctx, &instr->src[1]);
+         if (i)
+            P(ctx, " + uint(%uu)", i * sz);
+         P(ctx, access & ACCESS_ATOMIC ? "), memory_order_relaxed)" : ")");
+         P(ctx, " : %s(0)", scalar);
+      }
+      P(ctx, n > 1 ? ");\n" : ";\n");
+      break;
+   }
    case nir_intrinsic_load_global_constant: {
       src_to_packed_load(ctx, &instr->src[0], "constant",
                          msl_type_for_def(ctx->types, &instr->def),
@@ -1381,14 +1421,14 @@ intrinsic_to_msl(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr)
       break;
    }
    case nir_intrinsic_load_global_constant_bounded: {
+      const char *type = msl_type_for_def(ctx->types, &instr->def);
       src_to_msl(ctx, &instr->src[1]);
       P(ctx, " < ");
       src_to_msl(ctx, &instr->src[2]);
       P(ctx, " ? ");
       src_to_packed_load_offset(ctx, &instr->src[0], &instr->src[1], "constant",
-                                msl_type_for_def(ctx->types, &instr->def),
-                                instr->def.num_components);
-      P(ctx, " : 0;\n");
+                                type, instr->def.num_components);
+      P(ctx, " : %s(0);\n", type);
       break;
    }
    case nir_intrinsic_load_global_constant_offset: {

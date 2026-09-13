@@ -102,6 +102,9 @@ bool msl_gather_uses_buffer_ptr(nir_shader *nir, unsigned binding);
 
 static const nir_shader_compiler_options kk_nir_options = {
    .lower_fdph = true,
+   /* Robust SSBO loads become load_global_bounded (a select in MSL) instead
+    * of nir_lower_explicit_io's if/phi per component. */
+   .has_load_global_bounded = true,
    .has_fsub = true,
    .has_isub = true,
    .float_mul_add16 = nir_float_muladd_support_has_ffma,
