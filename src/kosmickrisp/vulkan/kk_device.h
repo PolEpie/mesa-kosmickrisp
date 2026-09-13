@@ -75,6 +75,47 @@ struct kk_sampler_heap {
    struct hash_table *ht;
 };
 
+/* Stand-in textures for VK_EXT_robustness2 nullDescriptor. Metal makes every
+ * texture member function on a null texture undefined, so instead of branching
+ * around each sample, kk_nir_lower_null_images redirects a read through a
+ * descriptor whose resource id is 0 to the stand-in matching the shader's
+ * texture type and zeroes the result. Contents are never observed, so all
+ * stand-ins alias one region. GPU resource ids live in `bo` at offset 0 as
+ * uint64_t[KK_NULL_TEX_COUNT], indexed by kk_null_tex_index(), bound at
+ * MSL_NULL_TEXTURES_BUFFER. */
+enum kk_null_tex_shape {
+   KK_NULL_TEX_2D,
+   KK_NULL_TEX_2D_ARRAY,
+   KK_NULL_TEX_3D,
+   KK_NULL_TEX_CUBE,
+   KK_NULL_TEX_CUBE_ARRAY,
+   KK_NULL_TEX_MS,
+   KK_NULL_TEX_MS_ARRAY,
+   KK_NULL_TEX_BUF,
+   KK_NULL_TEX_SHAPES,
+};
+
+enum kk_null_tex_type {
+   KK_NULL_TEX_FLOAT,
+   KK_NULL_TEX_INT,
+   KK_NULL_TEX_UINT,
+   KK_NULL_TEX_DEPTH,
+   KK_NULL_TEX_TYPES,
+};
+
+#define KK_NULL_TEX_COUNT (KK_NULL_TEX_SHAPES * KK_NULL_TEX_TYPES)
+
+static inline unsigned
+kk_null_tex_index(enum kk_null_tex_type type, enum kk_null_tex_shape shape)
+{
+   return type * KK_NULL_TEX_SHAPES + shape;
+}
+
+struct kk_null_textures {
+   struct kk_bo *bo;
+   mtl_texture *textures[KK_NULL_TEX_COUNT];
+};
+
 struct kk_precompiled_cache {
    struct kk_precompiled_shader shaders[LIBKK_NUM_PROGRAMS];
 };
@@ -109,6 +150,7 @@ struct kk_device {
    struct vk_device_dispatch_table exposed_dispatch_table;
 
    struct kk_sampler_heap samplers;
+   struct kk_null_textures null_textures;
    struct kk_query_table occlusion_queries;
 
    /* Track all heaps the user allocated so we can set them all as resident when

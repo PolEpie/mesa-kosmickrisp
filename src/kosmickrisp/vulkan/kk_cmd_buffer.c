@@ -17,6 +17,7 @@
 #include "kosmickrisp/bridge/mtl_device.h"
 #include "kosmickrisp/bridge/mtl_encoder.h"
 #include "kosmickrisp/bridge/vk_to_mtl_map.h"
+#include "kosmickrisp/compiler/nir_to_msl.h"
 
 #include "vk_alloc.h"
 #include "vk_common_entrypoints.h"
@@ -143,11 +144,13 @@ kk_create_cmd_buffer(struct vk_command_pool *vk_pool,
 
    {
       mtl_argument_table_descriptor *desc = mtl_new_argument_table_descriptor();
-      /* Root at 0, samplers at 1 and per draw data at 2 */
-      mtl_set_max_buffer_binding_count(desc, 3u);
+      /* Root at 0, samplers at 1, per draw data at 2, null stand-in textures
+       * at MSL_NULL_TEXTURES_BUFFER */
+      mtl_set_max_buffer_binding_count(desc, MSL_NULL_TEXTURES_BUFFER + 1);
       cmd->argument_table = mtl_new_argument_table(dev->mtl_handle, desc);
       mtl_set_address(cmd->argument_table, dev->samplers.table.bo->gpu, 1u);
-      mtl_release(desc);
+      mtl_set_address(cmd->argument_table, dev->null_textures.bo->gpu,
+                      MSL_NULL_TEXTURES_BUFFER);
    }
 
    cmd->submit_cmd_bufs = UTIL_DYNARRAY_INIT;

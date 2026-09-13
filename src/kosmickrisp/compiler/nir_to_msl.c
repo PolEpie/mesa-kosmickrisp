@@ -112,10 +112,14 @@ emit_inputs(struct nir_to_msl_ctx *ctx, nir_shader *shader)
    P_IND(ctx, "constant SamplerTable &sampler_table [[buffer(1)]]");
    if (ctx->uses_per_draw_data) {
       P(ctx, ",\n");
-      P_IND(ctx, "constant Buffer &per_draw [[buffer(2)]]\n");
-   } else {
-      P(ctx, "\n");
+      P_IND(ctx, "constant Buffer &per_draw [[buffer(2)]]");
    }
+   if (ctx->uses_null_textures) {
+      P(ctx, ",\n");
+      P_IND(ctx, "constant Buffer &buf%d [[buffer(%d)]]",
+            MSL_NULL_TEXTURES_BUFFER, MSL_NULL_TEXTURES_BUFFER);
+   }
+   P(ctx, "\n");
 }
 
 static const char *
@@ -2405,6 +2409,8 @@ msl_gather_info(struct nir_to_msl_ctx *ctx, struct nir_to_msl_options *options)
    nir_function_impl *impl = nir_shader_get_entrypoint(ctx->shader);
    ctx->types = msl_infer_types(ctx->shader);
    ctx->uses_per_draw_data = msl_gather_uses_per_draw_data(ctx->shader);
+   ctx->uses_null_textures =
+      msl_gather_uses_buffer_ptr(ctx->shader, MSL_NULL_TEXTURES_BUFFER);
 
    /* TODO_KOSMICKRISP
     * Reindex blocks and ssa. This allows us to optimize things we don't at the
