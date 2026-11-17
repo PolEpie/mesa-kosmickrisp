@@ -912,6 +912,7 @@ kk_upload_descriptor_root(struct kk_cmd_buffer *cmd,
       return 0u;
 
    root->addr = root_ptr.gpu;
+   root->null_textures = kk_cmd_buffer_device(cmd)->null_textures.bo->gpu;
 
    memcpy(root_ptr.cpu, root, sizeof(*root));
    desc->root_dirty = false;

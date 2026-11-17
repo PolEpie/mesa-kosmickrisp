@@ -29,6 +29,7 @@ struct kk_query_pool;
 
 struct kk_root_descriptor_table {
    uint64_t addr;
+   uint64_t null_textures;
 
    union {
       struct {

@@ -180,3 +180,10 @@ mtl_new_command_buffer(mtl_device *device)
 {
    return NULL;
 }
+
+mtl_texture *
+mtl_new_texture_1x1(mtl_device *device, enum mtl_texture_type type,
+                    enum mtl_pixel_format format, enum mtl_texture_usage usage)
+{
+   return NULL;
+}

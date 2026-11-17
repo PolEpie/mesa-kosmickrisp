@@ -90,6 +90,11 @@ struct kk_device {
    struct kk_sampler_heap samplers;
    struct kk_query_table occlusion_queries;
 
+   struct {
+      struct kk_bo *bo;
+      mtl_texture *textures[KK_NULL_TEXTURE_COUNT];
+   } null_textures;
+
    /* Track all heaps the user allocated so we can set them all as resident when
     * recording as required by Metal. */
    struct kk_residency_set residency_set;

@@ -253,6 +253,76 @@ kk_get_timestamp(struct vk_device *device, uint64_t *timestamp)
    return VK_SUCCESS;
 }
 
+static void
+kk_finish_null_textures(struct kk_device *dev)
+{
+   for (unsigned i = 0; i < KK_NULL_TEXTURE_COUNT; i++) {
+      mtl_texture *texture = dev->null_textures.textures[i];
+      if (texture) {
+         kk_device_remove_texture_from_residency_set(dev, texture);
+         mtl_release(texture);
+      }
+   }
+   if (dev->null_textures.bo)
+      kk_destroy_bo(dev, dev->null_textures.bo);
+}
+
+static VkResult
+kk_init_null_textures(struct kk_device *dev)
+{
+   static const enum mtl_pixel_format formats[KK_NULL_TEXTURE_KINDS] = {
+      [KK_NULL_TEXTURE_FLOAT] = MTL_PIXEL_FORMAT_R8G8B8A8_UNORM,
+      [KK_NULL_TEXTURE_UINT] = MTL_PIXEL_FORMAT_R8G8B8A8_UINT,
+      [KK_NULL_TEXTURE_SINT] = MTL_PIXEL_FORMAT_R8G8B8A8_SINT,
+      [KK_NULL_TEXTURE_DEPTH] = MTL_PIXEL_FORMAT_Z32_FLOAT,
+   };
+   static const enum mtl_texture_type types[] = {
+      MTL_TEXTURE_TYPE_1D,   MTL_TEXTURE_TYPE_1D_ARRAY,   MTL_TEXTURE_TYPE_2D,
+      MTL_TEXTURE_TYPE_2D_ARRAY, MTL_TEXTURE_TYPE_CUBE,
+      MTL_TEXTURE_TYPE_CUBE_ARRAY, MTL_TEXTURE_TYPE_3D,
+   };
+
+   VkResult result =
+      kk_alloc_bo(dev, &dev->vk.base, KK_NULL_TEXTURE_COUNT * sizeof(uint64_t),
+                  0, &dev->null_textures.bo);
+   if (result != VK_SUCCESS)
+      return result;
+
+   uint64_t *ids = dev->null_textures.bo->cpu;
+   memset(ids, 0, KK_NULL_TEXTURE_COUNT * sizeof(uint64_t));
+
+   for (unsigned t = 0; t < ARRAY_SIZE(types); t++) {
+      const bool flat = types[t] == MTL_TEXTURE_TYPE_1D ||
+                        types[t] == MTL_TEXTURE_TYPE_1D_ARRAY ||
+                        types[t] == MTL_TEXTURE_TYPE_3D;
+      const bool cube = types[t] == MTL_TEXTURE_TYPE_CUBE ||
+                        types[t] == MTL_TEXTURE_TYPE_CUBE_ARRAY;
+      for (unsigned kind = 0; kind < KK_NULL_TEXTURE_KINDS; kind++) {
+         const bool depth = kind == KK_NULL_TEXTURE_DEPTH;
+         if (depth && flat)
+            continue;
+
+         enum mtl_texture_usage usage = MTL_TEXTURE_USAGE_SHADER_READ;
+         if (!depth && !cube)
+            usage |= MTL_TEXTURE_USAGE_SHADER_WRITE;
+
+         mtl_texture *texture = mtl_new_texture_1x1(dev->mtl_handle, types[t],
+                                                    formats[kind], usage);
+         if (texture == NULL) {
+            kk_finish_null_textures(dev);
+            return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+         }
+
+         const unsigned slot = types[t] * KK_NULL_TEXTURE_KINDS + kind;
+         kk_device_add_texture_to_residency_set(dev, texture);
+         dev->null_textures.textures[slot] = texture;
+         ids[slot] = mtl_texture_get_gpu_resource_id(texture);
+      }
+   }
+
+   return VK_SUCCESS;
+}
+
 VKAPI_ATTR VkResult VKAPI_CALL
 kk_CreateDevice(VkPhysicalDevice physicalDevice,
                 const VkDeviceCreateInfo *pCreateInfo,
@@ -327,9 +397,13 @@ kk_CreateDevice(VkPhysicalDevice physicalDevice,
    if (result != VK_SUCCESS)
       goto fail_query_table;
 
-   result = kk_device_init_lib(dev);
+   result = kk_init_null_textures(dev);
    if (result != VK_SUCCESS)
       goto fail_sampler_heap;
+
+   result = kk_device_init_lib(dev);
+   if (result != VK_SUCCESS)
+      goto fail_null_textures;
 
    if (pdev->settings.gpu_capture_immediately) {
       mtl_start_gpu_capture(dev->mtl_handle, pdev->settings.gpu_capture_dir);
@@ -340,6 +414,8 @@ kk_CreateDevice(VkPhysicalDevice physicalDevice,
 
    return VK_SUCCESS;
 
+fail_null_textures:
+   kk_finish_null_textures(dev);
 fail_sampler_heap:
    kk_destroy_sampler_heap(dev, &dev->samplers);
 fail_query_table:
@@ -381,6 +457,7 @@ kk_DestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
    kk_device_finish_meta(dev);
    kk_device_finish_lib(dev);
    kk_query_table_finish(dev, &dev->occlusion_queries);
+   kk_finish_null_textures(dev);
    kk_destroy_sampler_heap(dev, &dev->samplers);
 
    /* Geometry heap */
