@@ -360,3 +360,18 @@ mtl_new_command_buffer(mtl_device *device)
       return [dev newCommandBuffer];
    }
 }
+
+mtl_texture *
+mtl_new_texture_1x1(mtl_device *device, enum mtl_texture_type type,
+                    enum mtl_pixel_format format, enum mtl_texture_usage usage)
+{
+   @autoreleasepool {
+      id<MTLDevice> dev = (id<MTLDevice>)device;
+      MTLTextureDescriptor *desc = [[MTLTextureDescriptor new] autorelease];
+      desc.textureType = (MTLTextureType)type;
+      desc.pixelFormat = (MTLPixelFormat)format;
+      desc.usage = (MTLTextureUsage)usage;
+      desc.storageMode = MTLStorageModePrivate;
+      return [dev newTextureWithDescriptor:desc];
+   }
+}

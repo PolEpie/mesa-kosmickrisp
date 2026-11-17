@@ -43,6 +43,16 @@
 /* Max size of a bound cbuf */
 #define KK_MAX_CBUF_SIZE (1u << 16)
 
+enum kk_null_texture_kind {
+   KK_NULL_TEXTURE_FLOAT,
+   KK_NULL_TEXTURE_UINT,
+   KK_NULL_TEXTURE_SINT,
+   KK_NULL_TEXTURE_DEPTH,
+   KK_NULL_TEXTURE_KINDS,
+};
+
+#define KK_NULL_TEXTURE_COUNT ((MTL_TEXTURE_TYPE_3D + 1) * KK_NULL_TEXTURE_KINDS)
+
 /* Metal related macros */
 #define KK_MTL_RESOURCE_OPTIONS                                                \
    MTL_RESOURCE_STORAGE_MODE_SHARED |                                          \
