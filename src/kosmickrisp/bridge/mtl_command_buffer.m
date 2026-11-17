@@ -45,6 +45,8 @@ mtl_command_resolve_counter_heap(mtl_command_buffer *command_buffer,
                                  mtl_counter_heap *heap, uint32_t first_index,
                                  uint32_t count, uint64_t dst_addr)
 {
+   if ([(id)heap isMemberOfClass:[NSObject class]])
+      return;
    @autoreleasepool {
       id<MTL4CommandBuffer> cmd_buf = (id<MTL4CommandBuffer>)command_buffer;
       id<MTL4CounterHeap> h = (id<MTL4CounterHeap>)heap;
