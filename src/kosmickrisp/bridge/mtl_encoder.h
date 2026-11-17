@@ -9,6 +9,7 @@
 
 #include "mtl_types.h"
 
+#include <stdbool.h>
 #include <stdint.h>
 
 /* Common encoder utils */
@@ -74,6 +75,10 @@ void mtl_dispatch_threadgroups_with_indirect_buffer(
 /* MTLRenderEncoder */
 mtl_render_encoder *mtl_new_render_command_encoder_with_descriptor(
    mtl_command_buffer *command_buffer, mtl_render_pass_descriptor *descriptor);
+
+mtl_render_encoder *mtl_new_render_command_encoder_with_options(
+   mtl_command_buffer *command_buffer, mtl_render_pass_descriptor *descriptor,
+   bool suspending, bool resuming);
 
 void mtl_set_viewports(mtl_render_encoder *encoder,
                        struct mtl_viewport *viewports, uint32_t count);

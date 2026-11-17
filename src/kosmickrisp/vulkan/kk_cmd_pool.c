@@ -104,6 +104,26 @@ kk_cmd_pool_return_allocator(struct kk_cmd_pool *pool,
    util_dynarray_append(&pool->metal.free_allocators, allocator);
 }
 
+mtl_command_allocator *
+kk_cmd_pool_get_merge_allocator(struct kk_cmd_pool *pool)
+{
+   if (util_dynarray_num_elements(&pool->metal.free_merge_allocators,
+                                  mtl_command_allocator *) > 0u)
+      return util_dynarray_pop(&pool->metal.free_merge_allocators,
+                               mtl_command_allocator *);
+
+   struct kk_device *dev = kk_cmd_pool_device(pool);
+   return mtl_new_command_allocator(dev->mtl_handle);
+}
+
+void
+kk_cmd_pool_return_merge_allocator(struct kk_cmd_pool *pool,
+                                   mtl_command_allocator *allocator)
+{
+   mtl_command_allocator_reset(allocator);
+   util_dynarray_append(&pool->metal.free_merge_allocators, allocator);
+}
+
 mtl_command_buffer *
 kk_cmd_pool_get_cmd_buf(struct kk_cmd_pool *pool)
 {
@@ -145,6 +165,7 @@ kk_CreateCommandPool(VkDevice _device,
    }
 
    pool->metal.free_allocators = UTIL_DYNARRAY_INIT;
+   pool->metal.free_merge_allocators = UTIL_DYNARRAY_INIT;
    pool->metal.free_cmd_bufs = UTIL_DYNARRAY_INIT;
 
    list_inithead(&pool->free_bos);
@@ -162,6 +183,12 @@ kk_cmd_pool_release_mtl_objects(struct kk_cmd_pool *pool)
       mtl_release(*allocator);
    }
    util_dynarray_clear(&pool->metal.free_allocators);
+
+   util_dynarray_foreach(&pool->metal.free_merge_allocators,
+                         mtl_command_allocator *, allocator) {
+      mtl_release(*allocator);
+   }
+   util_dynarray_clear(&pool->metal.free_merge_allocators);
 
    util_dynarray_foreach(&pool->metal.free_cmd_bufs, mtl_command_buffer *,
                          cmd_buf) {
@@ -184,6 +211,7 @@ kk_DestroyCommandPool(VkDevice _device, VkCommandPool commandPool,
    kk_cmd_pool_destroy_bos(pool);
    kk_cmd_pool_release_mtl_objects(pool);
    util_dynarray_fini(&pool->metal.free_allocators);
+   util_dynarray_fini(&pool->metal.free_merge_allocators);
    util_dynarray_fini(&pool->metal.free_cmd_bufs);
    vk_free2(&device->vk.alloc, pAllocator, pool);
 }
