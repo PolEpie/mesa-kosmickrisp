@@ -405,7 +405,8 @@ kk_CreateDevice(VkPhysicalDevice physicalDevice,
    if (result != VK_SUCCESS)
       goto fail_null_textures;
 
-   if (pdev->settings.gpu_capture_immediately) {
+   if (pdev->settings.gpu_capture_immediately &&
+       !debug_get_option("MESA_KK_GPU_CAPTURE_TRIGGER", NULL)) {
       mtl_start_gpu_capture(dev->mtl_handle, pdev->settings.gpu_capture_dir);
       dev->gpu_capture_active = true;
    }
