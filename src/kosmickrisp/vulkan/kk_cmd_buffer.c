@@ -9,6 +9,7 @@
 
 #include "kk_buffer.h"
 #include "kk_cmd_pool.h"
+#include "kk_debug.h"
 #include "kk_descriptor_set_layout.h"
 #include "kk_entrypoints.h"
 #include "kk_format.h"
@@ -60,6 +61,101 @@ kk_cmd_release_resources(struct kk_device *dev, struct kk_cmd_buffer *cmd)
    util_dynarray_clear(&cmd->ts_stage_map);
 }
 
+static void
+kk_cmd_release_segments(struct kk_cmd_buffer *cmd)
+{
+   struct kk_cmd_pool *pool = kk_cmd_buffer_pool(cmd);
+
+   util_dynarray_foreach(&cmd->metal.segments, struct kk_cmd_segment, seg) {
+      kk_cmd_pool_return_cmd_buf(pool, seg->cmd_buf);
+      if (seg->merge_desc)
+         mtl_release(seg->merge_desc);
+      if (seg->allocator)
+         kk_cmd_pool_return_merge_allocator(pool, seg->allocator);
+   }
+   util_dynarray_clear(&cmd->metal.segments);
+
+   if (cmd->metal.segment.merge_desc)
+      mtl_release(cmd->metal.segment.merge_desc);
+   if (cmd->metal.segment.allocator)
+      kk_cmd_pool_return_merge_allocator(pool, cmd->metal.segment.allocator);
+   memset(&cmd->metal.segment, 0, sizeof(cmd->metal.segment));
+   cmd->metal.segment_has_work = false;
+   cmd->metal.barrier_image_count = 0u;
+   cmd->metal.barrier_all = false;
+}
+
+static bool
+kk_cmd_pending_barrier_hits(const struct kk_cmd_buffer *cmd,
+                            const struct kk_merge_key *key)
+{
+   if (cmd->metal.barrier_all)
+      return true;
+
+   for (uint32_t i = 0; i < cmd->metal.barrier_image_count; i++) {
+      const struct vk_image *image = cmd->metal.barrier_images[i];
+      for (uint32_t c = 0; c < KK_MAX_RTS; c++) {
+         if (key->color[c] && key->color[c]->vk.image == image)
+            return true;
+      }
+      if (key->depth && key->depth->vk.image == image)
+         return true;
+      if (key->stencil && key->stencil->vk.image == image)
+         return true;
+   }
+   return false;
+}
+
+static void
+kk_cmd_track_barriers(struct kk_cmd_buffer *cmd, const VkDependencyInfo *dep)
+{
+   const VkAccessFlags2 attachment_write =
+      VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT |
+      VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
+      VK_ACCESS_2_MEMORY_WRITE_BIT;
+
+   for (uint32_t i = 0; i < dep->memoryBarrierCount; i++) {
+      if (dep->pMemoryBarriers[i].srcAccessMask & attachment_write)
+         cmd->metal.barrier_all = true;
+   }
+   for (uint32_t i = 0; i < dep->imageMemoryBarrierCount; i++) {
+      if (cmd->metal.barrier_image_count == KK_MAX_PENDING_BARRIER_IMAGES) {
+         cmd->metal.barrier_all = true;
+         break;
+      }
+      VK_FROM_HANDLE(vk_image, image, dep->pImageMemoryBarriers[i].image);
+      cmd->metal.barrier_images[cmd->metal.barrier_image_count++] = image;
+   }
+}
+
+static void
+kk_cmd_split_segment(struct kk_cmd_buffer *cmd, bool merge)
+{
+   struct kk_cmd_pool *pool = kk_cmd_buffer_pool(cmd);
+   mtl_command_buffer *next = kk_cmd_pool_get_cmd_buf(pool);
+   mtl_command_allocator *allocator =
+      merge ? kk_cmd_pool_get_merge_allocator(pool) : NULL;
+   if (next == NULL || (merge && allocator == NULL)) {
+      vk_command_buffer_set_error(&cmd->vk, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+      return;
+   }
+
+   mtl_end_command_buffer(cmd->metal.cmd_buf);
+   if (cmd->metal.segment_has_work || cmd->metal.segment.merge_desc) {
+      cmd->metal.segment.cmd_buf = cmd->metal.cmd_buf;
+      util_dynarray_append(&cmd->metal.segments, cmd->metal.segment);
+   } else {
+      kk_cmd_pool_return_cmd_buf(pool, cmd->metal.cmd_buf);
+   }
+   memset(&cmd->metal.segment, 0, sizeof(cmd->metal.segment));
+   cmd->metal.segment_has_work = false;
+
+   cmd->metal.cmd_buf = next;
+   cmd->metal.segment.allocator = allocator;
+   mtl_begin_command_buffer(cmd->metal.cmd_buf,
+                            merge ? allocator : cmd->metal.allocator);
+}
+
 /* Ends Metal command buffer recording and returns allocator to pool for reuse */
 static void
 end_recording(struct kk_cmd_buffer *cmd)
@@ -68,6 +164,9 @@ end_recording(struct kk_cmd_buffer *cmd)
       return;
 
    cs_end(cmd);
+   if (cmd->metal.segment.merge_desc)
+      cmd->metal.segment.break_after =
+         kk_cmd_pending_barrier_hits(cmd, &cmd->metal.segment.key);
    mtl_end_command_buffer(cmd->metal.cmd_buf);
    kk_cmd_pool_return_allocator(kk_cmd_buffer_pool(cmd), cmd->metal.allocator);
    cmd->metal.allocator = NULL;
@@ -85,6 +184,7 @@ kk_destroy_cmd_buffer(struct vk_command_buffer *vk_cmd_buffer)
 
    /* Ensure closed command buffer for safe returns to pool */
    end_recording(cmd);
+   kk_cmd_release_segments(cmd);
    if (cmd->metal.cmd_buf)
       kk_cmd_pool_return_cmd_buf(pool, cmd->metal.cmd_buf);
    cmd->metal.cmd_buf = NULL;
@@ -96,6 +196,7 @@ kk_destroy_cmd_buffer(struct vk_command_buffer *vk_cmd_buffer)
 
    kk_cmd_release_resources(dev, cmd);
    util_dynarray_fini(&cmd->large_bos);
+   util_dynarray_fini(&cmd->metal.segments);
    util_dynarray_fini(&cmd->post_render_writes);
    util_dynarray_fini(&cmd->ts_resolves);
    util_dynarray_fini(&cmd->ts_stage_map);
@@ -131,6 +232,7 @@ kk_create_cmd_buffer(struct vk_command_pool *vk_pool,
    cmd->ts_resolves = UTIL_DYNARRAY_INIT;
    cmd->ts_stage_map = UTIL_DYNARRAY_INIT;
    cmd->post_render_writes = UTIL_DYNARRAY_INIT;
+   cmd->metal.segments = UTIL_DYNARRAY_INIT;
 
    {
       mtl_argument_table_descriptor *desc = mtl_new_argument_table_descriptor();
@@ -165,6 +267,7 @@ kk_reset_cmd_buffer_internal(struct kk_cmd_buffer *cmd)
 
    /* Ensure closed command buffer so we can start it again */
    end_recording(cmd);
+   kk_cmd_release_segments(cmd);
    kk_cmd_release_resources(dev, cmd);
 
    cmd->uploader.bo = NULL;
@@ -269,8 +372,26 @@ cs_start_render(struct kk_cmd_buffer *cmd)
    /* Ensure no other active encoder, aka compute */
    cs_end(cmd);
 
-   cmd->metal.render = mtl_new_render_command_encoder_with_descriptor(
-      cmd->metal.cmd_buf, state->render_pass_descriptor);
+   const bool merge = state->merge_descriptor != NULL;
+   if (cmd->metal.segment.merge_desc || merge)
+      kk_cmd_split_segment(cmd, merge);
+
+   if (merge) {
+      mtl_retain(state->merge_descriptor);
+      cmd->metal.segment.merge_desc = state->merge_descriptor;
+      cmd->metal.segment.key = state->merge_key;
+      cmd->metal.segment.break_before =
+         kk_cmd_pending_barrier_hits(cmd, &state->merge_key);
+      cmd->metal.render = mtl_new_render_command_encoder_with_options(
+         cmd->metal.cmd_buf, state->merge_descriptor, true, true);
+   } else {
+      cmd->metal.render = mtl_new_render_command_encoder_with_descriptor(
+         cmd->metal.cmd_buf, state->render_pass_descriptor);
+   }
+   cmd->metal.render_merge = merge;
+   cmd->metal.segment_has_work = true;
+   cmd->metal.barrier_image_count = 0u;
+   cmd->metal.barrier_all = false;
 
    kk_encoder_update_debug(cmd, cmd->metal.render);
    /* Starting a new render pass means we already flushed and no barrier is
@@ -324,6 +445,9 @@ cs_get_compute(struct kk_cmd_buffer *cmd)
    }
 
    if (cmd->metal.compute == NULL) {
+      if (cmd->metal.segment.merge_desc)
+         kk_cmd_split_segment(cmd, false);
+      cmd->metal.segment_has_work = true;
       cmd->metal.compute = mtl_new_compute_command_encoder(cmd->metal.cmd_buf);
       mtl_compute_set_argument_table(cmd->metal.compute, cmd->argument_table);
       kk_encoder_update_debug(cmd, cmd->metal.compute);
@@ -333,12 +457,21 @@ cs_get_compute(struct kk_cmd_buffer *cmd)
 }
 
 static void
-end_encoder(struct kk_cmd_buffer *cmd, mtl_command_encoder *encoder)
+end_encoder(struct kk_cmd_buffer *cmd, mtl_command_encoder *encoder,
+            bool merge)
 {
    /* TODO_KOSMICKRISP This is probably overkill */
-   mtl_barrier_after_stages(encoder, MTL_STAGE_ALL, MTL_STAGE_ALL);
+   if (!merge)
+      mtl_barrier_after_stages(encoder, MTL_STAGE_ALL, MTL_STAGE_ALL);
    mtl_end_encoding(encoder);
    mtl_release(encoder);
+
+   if (util_dynarray_num_elements(&cmd->ts_resolves, struct kk_ts_resolve) >
+       0) {
+      if (cmd->metal.segment.merge_desc)
+         kk_cmd_split_segment(cmd, false);
+      cmd->metal.segment_has_work = true;
+   }
 
    /* Fold the pending timestamp counter-heap resolves into `cmd_buf` */
    util_dynarray_foreach(&cmd->ts_resolves, struct kk_ts_resolve, r) {
@@ -372,8 +505,9 @@ cs_end(struct kk_cmd_buffer *cmd)
 
    /* Render first as it may open a compute encoder for post render writes. */
    if (cmd->metal.render) {
-      end_encoder(cmd, cmd->metal.render);
+      end_encoder(cmd, cmd->metal.render, cmd->metal.render_merge);
       cmd->metal.render = NULL;
+      cmd->metal.render_merge = false;
 
       /* The stage map is only valid for the current render encoder */
       util_dynarray_clear(&cmd->ts_stage_map);
@@ -381,7 +515,7 @@ cs_end(struct kk_cmd_buffer *cmd)
    }
 
    if (cmd->metal.compute) {
-      end_encoder(cmd, cmd->metal.compute);
+      end_encoder(cmd, cmd->metal.compute, false);
       cmd->metal.compute = NULL;
    }
 }
@@ -462,6 +596,8 @@ kk_CmdPipelineBarrier2(VkCommandBuffer commandBuffer,
                        const VkDependencyInfo *pDependencyInfo)
 {
    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
+   if (!KK_DEBUG(NO_MERGE_PASSES))
+      kk_cmd_track_barriers(cmd, pDependencyInfo);
 
    /* TODO_KOSMICKRISP Lighten barriers according to the actual requested
     * barrier. To take advantage of this we need to remove the chaining of
@@ -474,6 +610,7 @@ kk_CmdPipelineBarrier2(VkCommandBuffer commandBuffer,
       if (cmd->state.gfx.render.samples > 1 ||
           kk_barrier_requires_encoder_split(cmd, pDependencyInfo)) {
          kk_apply_attachment_store_ops(cmd, true);
+         cmd->metal.barrier_all = true;
          cs_end(cmd);
          cs_start_render(cmd);
       } else
@@ -931,7 +1068,7 @@ kk_get_attachment_store_op(const struct kk_attachment *attachment,
 void
 kk_apply_attachment_store_ops(struct kk_cmd_buffer *cmd, bool force_store)
 {
-   if (!cmd->metal.render)
+   if (!cmd->metal.render || cmd->metal.render_merge)
       return;
 
    struct kk_rendering_state *render = &cmd->state.gfx.render;

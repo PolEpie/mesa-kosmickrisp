@@ -10,6 +10,7 @@
 #include <Metal/MTL4ComputeCommandEncoder.h>
 #include <Metal/MTL4Counters.h>
 #include <Metal/MTL4RenderCommandEncoder.h>
+#include <Metal/MTL4RenderPass.h>
 #include <Metal/MTLRenderPass.h>
 
 /* Common encoder utils */
@@ -295,6 +296,22 @@ mtl_new_render_command_encoder_with_descriptor(
       id<MTL4CommandBuffer> cmd = (id<MTL4CommandBuffer>)command_buffer;
       MTL4RenderPassDescriptor *desc = (MTL4RenderPassDescriptor *)descriptor;
       return [[cmd renderCommandEncoderWithDescriptor:desc] retain];
+   }
+}
+
+mtl_render_encoder *
+mtl_new_render_command_encoder_with_options(
+   mtl_command_buffer *command_buffer, mtl_render_pass_descriptor *descriptor,
+   bool suspending, bool resuming)
+{
+   @autoreleasepool {
+      id<MTL4CommandBuffer> cmd = (id<MTL4CommandBuffer>)command_buffer;
+      MTL4RenderPassDescriptor *desc = (MTL4RenderPassDescriptor *)descriptor;
+      MTL4RenderEncoderOptions options =
+         (suspending ? MTL4RenderEncoderOptionSuspending : 0) |
+         (resuming ? MTL4RenderEncoderOptionResuming : 0);
+      return [[cmd renderCommandEncoderWithDescriptor:desc options:options]
+         retain];
    }
 }
 

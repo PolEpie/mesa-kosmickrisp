@@ -11,6 +11,7 @@
 
 #include "kk_buffer.h"
 #include "kk_cmd_buffer.h"
+#include "kk_debug.h"
 #include "kk_format.h"
 #include "kk_image_view.h"
 #include "kk_physical_device.h"
@@ -248,6 +249,78 @@ kk_set_color_attachments(mtl_render_pass_descriptor *pass_descriptor,
    }
 }
 
+static bool
+kk_attachment_can_merge(const struct kk_attachment *att)
+{
+   if (!att->iview)
+      return true;
+
+   const struct kk_image *image =
+      container_of(att->iview->vk.image, struct kk_image, vk);
+   return att->load_op == VK_ATTACHMENT_LOAD_OP_LOAD &&
+          att->store_op == VK_ATTACHMENT_STORE_OP_STORE &&
+          att->resolve_mode == VK_RESOLVE_MODE_NONE &&
+          image->vk.samples == VK_SAMPLE_COUNT_1_BIT;
+}
+
+static void
+kk_setup_merge_descriptor(struct kk_cmd_buffer *cmd,
+                          mtl_render_pass_descriptor *pass_descriptor)
+{
+   struct kk_graphics_state *gfx = &cmd->state.gfx;
+   const struct kk_rendering_state *render = &gfx->render;
+
+   if (KK_DEBUG(NO_MERGE_PASSES) || render->flags != 0 ||
+       render->fsr_att.iview)
+      return;
+
+   bool any = render->depth_att.iview || render->stencil_att.iview;
+   if (!kk_attachment_can_merge(&render->depth_att) ||
+       !kk_attachment_can_merge(&render->stencil_att))
+      return;
+   for (uint32_t i = 0; i < render->color_att_count; i++) {
+      if (!kk_attachment_can_merge(&render->color_att[i]))
+         return;
+      any |= render->color_att[i].iview != NULL;
+   }
+   if (!any)
+      return;
+
+   struct kk_merge_key *key = &gfx->merge_key;
+   memset(key, 0, sizeof(*key));
+   key->area = render->area;
+   key->layer_count = render->layer_count;
+   key->view_mask = render->view_mask;
+   memcpy(key->color_map, render->color_map, sizeof(key->color_map));
+
+   mtl_render_pass_descriptor *copy =
+      mtl_new_render_pass_descriptor_copy(pass_descriptor);
+   for (uint32_t i = 0; i < render->color_att_count; i++) {
+      const uint8_t logical_index = render->color_map[i];
+      key->color[i] = render->color_att[i].iview;
+      if (!render->color_att[i].iview ||
+          logical_index == MESA_VK_ATTACHMENT_UNUSED)
+         continue;
+      mtl_render_pass_attachment_descriptor_set_store_action(
+         mtl_render_pass_descriptor_get_color_attachment(copy, logical_index),
+         MTL_STORE_ACTION_STORE);
+   }
+   if (render->depth_att.iview) {
+      key->depth = render->depth_att.iview;
+      mtl_render_pass_attachment_descriptor_set_store_action(
+         mtl_render_pass_descriptor_get_depth_attachment(copy),
+         MTL_STORE_ACTION_STORE);
+   }
+   if (render->stencil_att.iview) {
+      key->stencil = render->stencil_att.iview;
+      mtl_render_pass_attachment_descriptor_set_store_action(
+         mtl_render_pass_descriptor_get_stencil_attachment(copy),
+         MTL_STORE_ACTION_STORE);
+   }
+   mtl_render_pass_descriptor_set_visibility_accumulate(copy);
+   gfx->merge_descriptor = copy;
+}
+
 VKAPI_ATTR void VKAPI_CALL
 kk_CmdBeginRendering(VkCommandBuffer commandBuffer,
                      const VkRenderingInfo *pRenderingInfo)
@@ -439,8 +512,10 @@ kk_CmdBeginRendering(VkCommandBuffer commandBuffer,
    /* Rendering with no attachments requires pushing the start of the render
     * pass to first pipeline binding to know sample count. */
    cmd->state.gfx.render_pass_descriptor = pass_descriptor;
-   if (!no_framebuffer)
+   if (!no_framebuffer) {
+      kk_setup_merge_descriptor(cmd, pass_descriptor);
       cs_start_render(cmd);
+   }
 
    /* Store descriptor in case we need to restart the pass at pipeline barrier,
     * but force loads */
@@ -632,6 +707,10 @@ kk_CmdEndRendering2KHR(VkCommandBuffer commandBuffer,
    cs_end(cmd);
    mtl_release(cmd->state.gfx.render_pass_descriptor);
    cmd->state.gfx.render_pass_descriptor = NULL;
+   if (cmd->state.gfx.merge_descriptor) {
+      mtl_release(cmd->state.gfx.merge_descriptor);
+      cmd->state.gfx.merge_descriptor = NULL;
+   }
 
    if (render->flags &
        (VK_RENDERING_SUSPENDING_BIT | VK_RENDERING_CUSTOM_RESOLVE_BIT_EXT))
@@ -957,6 +1036,10 @@ kk_flush_render_pass(struct kk_cmd_buffer *cmd)
          needs_restart = true;
          color_attachment_map_changed = true;
       }
+   }
+   if (needs_restart && cmd->state.gfx.merge_descriptor) {
+      mtl_release(cmd->state.gfx.merge_descriptor);
+      cmd->state.gfx.merge_descriptor = NULL;
    }
    /* If render pass state changes and the pass is currently active, end the
     * current encoder and prepare to restart it */

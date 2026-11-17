@@ -143,6 +143,27 @@ enum kk_dirty {
    KK_DIRTY_OCCLUSION = BITFIELD_BIT(1),
 };
 
+struct kk_merge_key {
+   const struct kk_image_view *color[KK_MAX_RTS];
+   const struct kk_image_view *depth;
+   const struct kk_image_view *stencil;
+   uint8_t color_map[KK_MAX_RTS];
+   VkRect2D area;
+   uint32_t layer_count;
+   uint32_t view_mask;
+};
+
+struct kk_cmd_segment {
+   mtl_command_buffer *cmd_buf;
+   mtl_command_allocator *allocator;
+   mtl_render_pass_descriptor *merge_desc;
+   struct kk_merge_key key;
+   bool break_before;
+   bool break_after;
+};
+
+#define KK_MAX_PENDING_BARRIER_IMAGES 16
+
 struct kk_graphics_state {
    struct kk_rendering_state render;
    struct kk_descriptor_state descriptors;
@@ -150,6 +171,8 @@ struct kk_graphics_state {
 
    mtl_depth_stencil_state *depth_stencil_state;
    mtl_render_pass_descriptor *render_pass_descriptor;
+   mtl_render_pass_descriptor *merge_descriptor;
+   struct kk_merge_key merge_key;
    bool is_depth_stencil_dynamic;
    /* Render-pass depth/stencil attachment presence the dynamic depth_stencil_state above was last
     * compiled against. has_depth/has_stencil come from the render pass (dyn->rp.attachments), not from
@@ -250,6 +273,13 @@ struct kk_cmd_buffer {
       mtl_command_buffer *cmd_buf;
       mtl_render_encoder *render;
       mtl_compute_encoder *compute;
+      struct util_dynarray segments;
+      struct kk_cmd_segment segment;
+      bool segment_has_work;
+      bool render_merge;
+      const struct vk_image *barrier_images[KK_MAX_PENDING_BARRIER_IMAGES];
+      uint32_t barrier_image_count;
+      bool barrier_all;
    } metal;
    /* Pending timestamp resolves (struct kk_ts_resolve), flushed at cs_end. */
    struct util_dynarray ts_resolves;

@@ -18,6 +18,11 @@
 
 #include "c11/threads.h"
 
+struct kk_bookend {
+   mtl_command_buffer *cmd_buf;
+   mtl_command_allocator *allocator;
+};
+
 struct kk_queue {
    struct vk_queue vk;
    struct mtl_command_queue *mtl_handle;
@@ -29,6 +34,8 @@ struct kk_queue {
    struct kk_cmd_pool *cmd_pool;
    struct util_dynarray free_cmd_buffers;
    uint32_t commits_in_flight;
+   struct util_dynarray merge_bookends;
+   uint32_t merge_commits_in_flight;
    mtx_t mutex;
    cnd_t cond;
 };

@@ -18,6 +18,12 @@ mtl_new_render_pass_descriptor(void)
    return NULL;
 }
 
+mtl_render_pass_descriptor *
+mtl_new_render_pass_descriptor_copy(mtl_render_pass_descriptor *descriptor)
+{
+   return NULL;
+}
+
 mtl_render_pass_attachment_descriptor *
 mtl_render_pass_descriptor_get_color_attachment(
    mtl_render_pass_descriptor *descriptor, uint32_t index)
@@ -164,6 +170,12 @@ mtl_render_pass_descriptor_set_sample_positions(
 void
 mtl_render_pass_descriptor_set_visibility_buffer(
    mtl_render_pass_descriptor *descriptor, mtl_buffer *visibility_buffer)
+{
+}
+
+void
+mtl_render_pass_descriptor_set_visibility_accumulate(
+   mtl_render_pass_descriptor *descriptor)
 {
 }
 
