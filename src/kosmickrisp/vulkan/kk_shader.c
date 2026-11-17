@@ -54,6 +54,15 @@ kk_get_spirv_options(struct vk_physical_device *vk_pdev,
 {
    if (KK_DEBUG(FORCE_ROBUSTNESS))
       rs = &rs_all_supported;
+   struct vk_pipeline_robustness_state rs_no_buffers;
+   if (KK_DEBUG(NO_ROBUSTNESS)) {
+      rs_no_buffers = *rs;
+      rs_no_buffers.uniform_buffers =
+         VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_DISABLED;
+      rs_no_buffers.storage_buffers =
+         VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_DISABLED;
+      rs = &rs_no_buffers;
+   }
    return (struct spirv_to_nir_options){
       .environment = NIR_SPIRV_VULKAN,
       .ssbo_addr_format = kk_buffer_addr_format(rs->storage_buffers),
@@ -693,6 +702,15 @@ kk_lower_nir(struct kk_device *dev, nir_shader *nir, bool emulated_stage,
 
    if (KK_DEBUG(FORCE_ROBUSTNESS))
       rs = &rs_all_supported;
+   struct vk_pipeline_robustness_state rs_no_buffers;
+   if (KK_DEBUG(NO_ROBUSTNESS)) {
+      rs_no_buffers = *rs;
+      rs_no_buffers.uniform_buffers =
+         VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_DISABLED;
+      rs_no_buffers.storage_buffers =
+         VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_DISABLED;
+      rs = &rs_no_buffers;
+   }
 
    const nir_opt_access_options access_options = {
       .is_vulkan = true,
