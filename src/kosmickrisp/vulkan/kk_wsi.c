@@ -15,6 +15,9 @@
 #include "wsi_common.h"
 
 #include "kosmickrisp/bridge/mtl_bridge.h"
+#include "util/u_debug.h"
+
+#include <unistd.h>
 
 static PFN_vkVoidFunction
 kk_instance_get_proc_addr_unchecked(const struct vk_instance *instance,
@@ -92,9 +95,29 @@ kk_wsi_cmd_blit_image(VkCommandBuffer vk_cmd, const VkBlitImageInfo2 *blit_info,
 }
 
 static void
+kk_gpu_capture_tick(struct kk_device *dev)
+{
+   static int frames_left = 0;
+   const char *trigger = debug_get_option("MESA_KK_GPU_CAPTURE_TRIGGER", NULL);
+   if (!trigger || !kk_device_physical(dev)->settings.gpu_capture_enabled)
+      return;
+
+   if (frames_left > 0) {
+      if (--frames_left == 0)
+         mtl_stop_gpu_capture();
+   } else if (access(trigger, W_OK) == 0 && unlink(trigger) == 0) {
+      mtl_start_gpu_capture(
+         dev->mtl_handle,
+         debug_get_option("MESA_KK_GPU_CAPTURE_DIRECTORY", NULL));
+      frames_left = debug_get_num_option("MESA_KK_GPU_CAPTURE_FRAMES", 1);
+   }
+}
+
+static void
 kk_encode_drawable_present(VkCommandBuffer vk_cmd, void *drawable)
 {
    VK_FROM_HANDLE(kk_cmd_buffer, cmd, vk_cmd);
+   kk_gpu_capture_tick(kk_cmd_buffer_device(cmd));
    /* WSI re-records this blit command buffer at every acquire. If the app acquires
     * the image again before its previous present was submitted (s&box queues the
     * present for its render thread and acquires the next image right away), the

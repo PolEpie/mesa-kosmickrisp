@@ -507,6 +507,8 @@ void
 mtl_compute_write_timestamp(mtl_compute_encoder *encoder,
                             mtl_counter_heap *heap, uint32_t index)
 {
+   if ([(id)heap isMemberOfClass:[NSObject class]])
+      return;
    @autoreleasepool {
       id<MTL4ComputeCommandEncoder> enc =
          (id<MTL4ComputeCommandEncoder>)encoder;
@@ -522,6 +524,8 @@ mtl_render_write_timestamp(mtl_render_encoder *encoder,
                            enum mtl_render_stages stage, mtl_counter_heap *heap,
                            uint32_t index)
 {
+   if ([(id)heap isMemberOfClass:[NSObject class]])
+      return;
    @autoreleasepool {
       id<MTL4RenderCommandEncoder> enc = (id<MTL4RenderCommandEncoder>)encoder;
       id<MTL4CounterHeap> h = (id<MTL4CounterHeap>)heap;

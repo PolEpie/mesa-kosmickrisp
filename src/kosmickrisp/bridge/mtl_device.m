@@ -205,6 +205,8 @@ mtl_device_timestamp_frequency(mtl_device *dev)
 mtl_counter_heap *
 mtl_new_timestamp_counter_heap(mtl_device *dev, uint32_t count)
 {
+   if (getenv("MESA_KK_GPU_CAPTURE"))
+      return (mtl_counter_heap *)[NSObject new];
    @autoreleasepool {
       id<MTLDevice> device = (id<MTLDevice>)dev;
       MTL4CounterHeapDescriptor *desc =
