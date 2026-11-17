@@ -102,6 +102,7 @@ static const nir_shader_compiler_options kk_nir_options = {
    .lower_fdph = true,
    .has_fsub = true,
    .has_isub = true,
+   .has_load_global_bounded = true,
    .float_mul_add16 = nir_float_muladd_support_has_ffma,
    .float_mul_add32 = nir_float_muladd_support_has_ffma,
    .lower_extract_word = true,

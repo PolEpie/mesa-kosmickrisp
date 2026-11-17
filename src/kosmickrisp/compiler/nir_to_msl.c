@@ -1370,15 +1370,47 @@ intrinsic_to_msl(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr)
       P(ctx, ";\n");
       break;
    }
-   case nir_intrinsic_load_global_constant_bounded: {
+   case nir_intrinsic_load_global_constant_bounded:
+   case nir_intrinsic_load_global_bounded: {
+      const bool is_const =
+         instr->intrinsic == nir_intrinsic_load_global_constant_bounded;
+      const enum gl_access_qualifier access =
+         is_const ? 0 : nir_intrinsic_access(instr);
+      const char *type = msl_type_for_def(ctx->types, &instr->def);
+      const char *qualifier =
+         is_const ? "constant" : global_access_qualifier(ctx, access);
+      const unsigned comps = instr->def.num_components;
+      const unsigned last_byte =
+         is_const ? 0 : comps * instr->def.bit_size / 8 - 1;
+      P(ctx, "select(%s(0), ", type);
+      if (access & ACCESS_ATOMIC) {
+         assert(comps == 1u && "We can only do single component with atomics");
+         P(ctx, "atomic_load_explicit((%s atomic_%s*)(", qualifier, type);
+      } else if (comps == 1) {
+         P(ctx, "*(%s %s*)(", qualifier, type);
+      } else {
+         P(ctx, "%s(*(%s packed_%s*)(", type, qualifier, type);
+      }
+      P(ctx, "select((ulong)&buf0.contents[0], ");
+      src_to_msl(ctx, &instr->src[0]);
+      P(ctx, " + ");
+      src_to_msl(ctx, &instr->src[1]);
+      P(ctx, ", uint(%uu) + ", last_byte);
       src_to_msl(ctx, &instr->src[1]);
       P(ctx, " < ");
       src_to_msl(ctx, &instr->src[2]);
-      P(ctx, " ? ");
-      src_to_packed_load_offset(ctx, &instr->src[0], &instr->src[1], "constant",
-                                msl_type_for_def(ctx->types, &instr->def),
-                                instr->def.num_components);
-      P(ctx, " : 0;\n");
+      if (access & ACCESS_ATOMIC) {
+         P(ctx, ")), memory_order_relaxed), ");
+      } else if (comps == 1) {
+         P(ctx, ")), ");
+      } else {
+         P(ctx, "))), bool%u(", comps);
+      }
+      P(ctx, "uint(%uu) + ", last_byte);
+      src_to_msl(ctx, &instr->src[1]);
+      P(ctx, " < ");
+      src_to_msl(ctx, &instr->src[2]);
+      P(ctx, comps == 1 ? ");\n" : "));\n");
       break;
    }
    case nir_intrinsic_load_global_constant_offset: {
