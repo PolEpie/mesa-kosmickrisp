@@ -1009,6 +1009,28 @@ kk_nir_lower_vertex_id_zero_base(struct nir_shader *nir)
    return progress;
 }
 
+static bool
+kk_mem_vectorize_cb(unsigned align_mul, unsigned align_offset,
+                    unsigned bit_size, unsigned num_components,
+                    int64_t hole_size, nir_intrinsic_instr *low,
+                    nir_intrinsic_instr *high, void *data)
+{
+   if (hole_size > 0 || num_components > 4 || bit_size < 8 || bit_size > 32)
+      return false;
+
+   if ((nir_intrinsic_access(low) | nir_intrinsic_access(high)) &
+       ACCESS_ATOMIC)
+      return false;
+
+   if ((low->intrinsic == nir_intrinsic_load_global_bounded ||
+        low->intrinsic == nir_intrinsic_load_global_constant_bounded) &&
+       low->src[2].ssa != high->src[2].ssa)
+      return false;
+
+   return align_mul >= 16 &&
+          (align_offset % 16) + num_components * bit_size / 8 <= 16;
+}
+
 /* Consumes nir */
 static void
 kk_compile_msl(struct kk_physical_device *pdev, nir_shader *nir,
@@ -1016,7 +1038,16 @@ kk_compile_msl(struct kk_physical_device *pdev, nir_shader *nir,
                struct msl_compile_data *data, const bool apply_wa19)
 {
    NIR_PASS(_, nir, kk_nir_lower_poly);
-
+   NIR_PASS(_, nir, nir_opt_copy_prop);
+   NIR_PASS(_, nir, nir_opt_cse);
+   NIR_PASS(_, nir, nir_opt_constant_folding);
+   NIR_PASS(_, nir, nir_opt_algebraic);
+   NIR_PASS(_, nir, nir_opt_load_store_vectorize,
+            &(const nir_load_store_vectorize_options){
+               .modes = nir_var_mem_global,
+               .robust_modes = nir_var_mem_global,
+               .callback = kk_mem_vectorize_cb,
+            });
    msl_optimize_nir(nir);
    modify_nir_info(nir);
 

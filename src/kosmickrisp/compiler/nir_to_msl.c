@@ -1380,8 +1380,13 @@ intrinsic_to_msl(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr)
       const char *qualifier =
          is_const ? "constant" : global_access_qualifier(ctx, access);
       const unsigned comps = instr->def.num_components;
+      const unsigned comp_bytes = instr->def.bit_size / 8;
+      const unsigned comp_last = is_const ? 0 : comp_bytes - 1;
+      const bool in_window =
+         nir_intrinsic_align_mul(instr) >= 16 &&
+         nir_intrinsic_align_offset(instr) % 16 + comps * comp_bytes <= 16;
       const unsigned last_byte =
-         is_const ? 0 : comps * instr->def.bit_size / 8 - 1;
+         in_window ? comp_last : (is_const ? 0 : comps * comp_bytes - 1);
       P(ctx, "select(%s(0), ", type);
       if (access & ACCESS_ATOMIC) {
          assert(comps == 1u && "We can only do single component with atomics");
@@ -1406,10 +1411,13 @@ intrinsic_to_msl(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr)
       } else {
          P(ctx, "))), bool%u(", comps);
       }
-      P(ctx, "uint(%uu) + ", last_byte);
-      src_to_msl(ctx, &instr->src[1]);
-      P(ctx, " < ");
-      src_to_msl(ctx, &instr->src[2]);
+      for (unsigned c = 0; c < comps; c++) {
+         P(ctx, "%suint(%uu) + ", c ? ", " : "",
+           in_window ? c * comp_bytes + comp_last : last_byte);
+         src_to_msl(ctx, &instr->src[1]);
+         P(ctx, " < ");
+         src_to_msl(ctx, &instr->src[2]);
+      }
       P(ctx, comps == 1 ? ");\n" : "));\n");
       break;
    }
