@@ -36,6 +36,7 @@ struct kk_queue {
    uint32_t commits_in_flight;
    struct util_dynarray merge_bookends;
    uint32_t merge_commits_in_flight;
+   mtl_fence *merge_fence;
    mtx_t mutex;
    cnd_t cond;
 };
