@@ -162,8 +162,28 @@ kk_queue_bookend(struct kk_queue *queue, struct kk_merge_commit *merge,
    mtl_command_buffer *cmd_buf = kk_queue_begin_bookend(queue, merge);
    mtl_render_encoder *encoder = mtl_new_render_command_encoder_with_options(
       cmd_buf, descriptor, suspending, !suspending);
-   if (!suspending)
+   if (suspending)
+      mtl_wait_for_fence(encoder, queue->merge_fence, MTL_STAGE_VERTEX);
+   else
       mtl_barrier_after_stages(encoder, MTL_STAGE_ALL, MTL_STAGE_ALL);
+   mtl_end_encoding(encoder);
+   mtl_release(encoder);
+   mtl_end_command_buffer(cmd_buf);
+   return cmd_buf;
+}
+
+/* Vertex work recorded in resuming render encoders is not held back by queue
+ * barriers: neither by the producer barriers ending earlier encoders nor by
+ * consumer barriers in the merged pass itself. Fragment work is. Fences are
+ * honored, so wait for all earlier work here and update the fence the opener
+ * waits on before its vertex stage. */
+static mtl_command_buffer *
+kk_queue_merge_wait(struct kk_queue *queue, struct kk_merge_commit *merge)
+{
+   mtl_command_buffer *cmd_buf = kk_queue_begin_bookend(queue, merge);
+   mtl_compute_encoder *encoder = mtl_new_compute_command_encoder(cmd_buf);
+   mtl_barrier_after_queue_stages(encoder, MTL_STAGE_ALL, MTL_STAGE_DISPATCH);
+   mtl_update_fence(encoder, queue->merge_fence, MTL_STAGE_DISPATCH);
    mtl_end_encoding(encoder);
    mtl_release(encoder);
    mtl_end_command_buffer(cmd_buf);
@@ -238,6 +258,7 @@ kk_queue_commit_segments(struct kk_queue *queue,
       if (segment->merge_desc && !chain_prev) {
          if (util_dynarray_num_elements(&cmd_bufs, mtl_command_buffer *))
             kk_queue_commit_group(queue, &cmd_bufs, NULL, NULL, NULL);
+         util_dynarray_append(&cmd_bufs, kk_queue_merge_wait(queue, merge));
          mtl_command_buffer *opener =
             kk_queue_bookend(queue, merge, segment->merge_desc, true);
          util_dynarray_append(&cmd_bufs, opener);
@@ -495,6 +516,7 @@ kk_queue_init(struct kk_device *dev, struct kk_queue *queue,
    cnd_init(&queue->cond);
 
    queue->mtl_handle = mtl_new_command_queue(dev->mtl_handle);
+   queue->merge_fence = mtl_new_fence(dev->mtl_handle);
    mtl_command_queue_add_residency_set(queue->mtl_handle,
                                        dev->residency_set.handle);
 
@@ -512,6 +534,7 @@ kk_queue_finish(struct kk_device *dev, struct kk_queue *queue)
    mtl_command_queue_remove_residency_set(queue->mtl_handle,
                                           dev->residency_set.handle);
    mtl_release(queue->mtl_handle);
+   mtl_release(queue->merge_fence);
 
    kk_DestroyCommandPool(kk_device_to_handle(dev),
                          kk_cmd_pool_to_handle(queue->cmd_pool), NULL);

@@ -295,13 +295,13 @@ kk_setup_merge_descriptor(struct kk_cmd_buffer *cmd,
       return;
 
    /* Only merge a multisampled pass when it is the first encoder of the
-    * command buffer. The opener of a merged pass has no barrier waiting for
-    * earlier work (see kk_queue_bookend), so it can start while an earlier
-    * render pass is still running, which hangs the GPU with 8x MSAA color +
-    * depth/stencil attachments. A consumer barrier in the opener fixes the
-    * hang but costs more than merging these passes saves.
-    * TODO_KOSMICKRISP Find a cheaper way to order merged passes after earlier
-    * work and lift this restriction. */
+    * command buffer. Every merged pass waits for all earlier work before its
+    * vertex stage (see kk_queue_merge_wait), and merging the multisampled
+    * passes that follow other encoders as well measured slower than leaving
+    * them unmerged.
+    * TODO_KOSMICKRISP Order merged passes against earlier work with fences
+    * updated by the producing encoders instead of a full wait, then revisit
+    * this restriction. */
    bool multisampled = kk_attachment_is_multisampled(&render->depth_att) ||
                        kk_attachment_is_multisampled(&render->stencil_att);
    for (uint32_t i = 0; i < render->color_att_count; i++)
