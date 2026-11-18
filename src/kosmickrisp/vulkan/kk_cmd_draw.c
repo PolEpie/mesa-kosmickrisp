@@ -255,12 +255,20 @@ kk_attachment_can_merge(const struct kk_attachment *att)
    if (!att->iview)
       return true;
 
-   const struct kk_image *image =
-      container_of(att->iview->vk.image, struct kk_image, vk);
    return att->load_op == VK_ATTACHMENT_LOAD_OP_LOAD &&
           att->store_op == VK_ATTACHMENT_STORE_OP_STORE &&
-          att->resolve_mode == VK_RESOLVE_MODE_NONE &&
-          image->vk.samples == VK_SAMPLE_COUNT_1_BIT;
+          att->resolve_mode == VK_RESOLVE_MODE_NONE;
+}
+
+static bool
+kk_attachment_is_multisampled(const struct kk_attachment *att)
+{
+   if (!att->iview)
+      return false;
+
+   const struct kk_image *image =
+      container_of(att->iview->vk.image, struct kk_image, vk);
+   return image->vk.samples != VK_SAMPLE_COUNT_1_BIT;
 }
 
 static void
@@ -284,6 +292,21 @@ kk_setup_merge_descriptor(struct kk_cmd_buffer *cmd,
       any |= render->color_att[i].iview != NULL;
    }
    if (!any)
+      return;
+
+   /* Only merge a multisampled pass when it is the first encoder of the
+    * command buffer. The opener of a merged pass has no barrier waiting for
+    * earlier work (see kk_queue_bookend), so it can start while an earlier
+    * render pass is still running, which hangs the GPU with 8x MSAA color +
+    * depth/stencil attachments. A consumer barrier in the opener fixes the
+    * hang but costs more than merging these passes saves.
+    * TODO_KOSMICKRISP Find a cheaper way to order merged passes after earlier
+    * work and lift this restriction. */
+   bool multisampled = kk_attachment_is_multisampled(&render->depth_att) ||
+                       kk_attachment_is_multisampled(&render->stencil_att);
+   for (uint32_t i = 0; i < render->color_att_count; i++)
+      multisampled |= kk_attachment_is_multisampled(&render->color_att[i]);
+   if (multisampled && cmd->state.encoder_count != 0u)
       return;
 
    struct kk_merge_key *key = &gfx->merge_key;

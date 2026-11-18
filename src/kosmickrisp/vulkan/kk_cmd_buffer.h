@@ -303,6 +303,8 @@ struct kk_cmd_buffer {
       uint64_t root_addr;
       /* Only tracks graphics shaders since compute is always bound for now. */
       uint32_t dirty_shaders;
+      /* Metal encoders created in this command buffer so far */
+      uint32_t encoder_count;
    } state;
 
    struct kk_uploader uploader;

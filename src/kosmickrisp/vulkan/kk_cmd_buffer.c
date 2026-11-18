@@ -389,6 +389,7 @@ cs_start_render(struct kk_cmd_buffer *cmd)
          cmd->metal.cmd_buf, state->render_pass_descriptor);
    }
    cmd->metal.render_merge = merge;
+   cmd->state.encoder_count++;
    cmd->metal.segment_has_work = true;
    cmd->metal.barrier_image_count = 0u;
    cmd->metal.barrier_all = false;
@@ -449,6 +450,7 @@ cs_get_compute(struct kk_cmd_buffer *cmd)
          kk_cmd_split_segment(cmd, false);
       cmd->metal.segment_has_work = true;
       cmd->metal.compute = mtl_new_compute_command_encoder(cmd->metal.cmd_buf);
+      cmd->state.encoder_count++;
       mtl_compute_set_argument_table(cmd->metal.compute, cmd->argument_table);
       kk_encoder_update_debug(cmd, cmd->metal.compute);
    }
