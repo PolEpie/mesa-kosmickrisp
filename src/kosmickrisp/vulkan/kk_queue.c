@@ -172,12 +172,19 @@ kk_queue_bookend(struct kk_queue *queue, struct kk_merge_commit *merge,
    return cmd_buf;
 }
 
+/* Vertex work recorded in resuming render encoders is not held back by queue
+ * barriers: neither by the producer barriers ending earlier encoders nor by
+ * consumer barriers in the merged pass itself. Fragment work is. Fences are
+ * honored, so wait here for the earlier stages that vertex work recorded since
+ * the last wait depends on, and update the fence the opener waits on before
+ * its vertex stage. */
 static mtl_command_buffer *
-kk_queue_merge_wait(struct kk_queue *queue, struct kk_merge_commit *merge)
+kk_queue_merge_wait(struct kk_queue *queue, struct kk_merge_commit *merge,
+                    enum mtl_stages stages)
 {
    mtl_command_buffer *cmd_buf = kk_queue_begin_bookend(queue, merge);
    mtl_compute_encoder *encoder = mtl_new_compute_command_encoder(cmd_buf);
-   mtl_barrier_after_queue_stages(encoder, MTL_STAGE_ALL, MTL_STAGE_DISPATCH);
+   mtl_barrier_after_queue_stages(encoder, stages, MTL_STAGE_DISPATCH);
    mtl_update_fence(encoder, queue->merge_fence, MTL_STAGE_DISPATCH);
    mtl_end_encoding(encoder);
    mtl_release(encoder);
@@ -253,12 +260,17 @@ kk_queue_commit_segments(struct kk_queue *queue,
       if (segment->merge_desc && !chain_prev) {
          if (util_dynarray_num_elements(&cmd_bufs, mtl_command_buffer *))
             kk_queue_commit_group(queue, &cmd_bufs, NULL, NULL, NULL);
-         util_dynarray_append(&cmd_bufs, kk_queue_merge_wait(queue, merge));
+         if (queue->vertex_wait) {
+            util_dynarray_append(
+               &cmd_bufs, kk_queue_merge_wait(queue, merge, queue->vertex_wait));
+            queue->vertex_wait = 0;
+         }
          mtl_command_buffer *opener =
             kk_queue_bookend(queue, merge, segment->merge_desc, true);
          util_dynarray_append(&cmd_bufs, opener);
       }
       util_dynarray_append(&cmd_bufs, segment->cmd_buf);
+      queue->vertex_wait |= segment->vertex_wait;
       if (segment->merge_desc && !chain_next) {
          mtl_command_buffer *closer =
             kk_queue_bookend(queue, merge, segment->merge_desc, false);
@@ -396,6 +408,7 @@ kk_queue_submit(struct vk_queue *vk_queue, struct vk_queue_submit *submit)
       struct kk_sync_timeline *sync =
          container_of(wait->sync, struct kk_sync_timeline, base);
       mtl_wait_for_event(queue->mtl_handle, sync->mtl_handle, wait->wait_value);
+      queue->vertex_wait = MTL_STAGE_ALL;
    }
 
    /* Ensure any changes to residency are propagated before we submit any
@@ -512,6 +525,7 @@ kk_queue_init(struct kk_device *dev, struct kk_queue *queue,
 
    queue->mtl_handle = mtl_new_command_queue(dev->mtl_handle);
    queue->merge_fence = mtl_new_fence(dev->mtl_handle);
+   queue->vertex_wait = MTL_STAGE_ALL;
    mtl_command_queue_add_residency_set(queue->mtl_handle,
                                        dev->residency_set.handle);
 

@@ -112,5 +112,7 @@ kk_CmdWaitEvents2(VkCommandBuffer commandBuffer, uint32_t eventCount,
                   const VkEvent *pEvents,
                   const VkDependencyInfo *pDependencyInfos)
 {
-   /* We do nothing, event should already be set by the time we are here. */
+   VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
+   for (uint32_t i = 0; i < eventCount; i++)
+      kk_cmd_track_vertex_dependencies(cmd, &pDependencyInfos[i]);
 }

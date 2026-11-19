@@ -104,6 +104,78 @@ kk_cmd_pending_barrier_hits(const struct kk_cmd_buffer *cmd,
    return false;
 }
 
+static enum mtl_stages
+kk_vertex_wait_stages(VkPipelineStageFlags2 src)
+{
+   const VkPipelineStageFlags2 geometry =
+      VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT |
+      VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT |
+      VK_PIPELINE_STAGE_2_INDEX_INPUT_BIT |
+      VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT |
+      VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT |
+      VK_PIPELINE_STAGE_2_TESSELLATION_CONTROL_SHADER_BIT |
+      VK_PIPELINE_STAGE_2_TESSELLATION_EVALUATION_SHADER_BIT |
+      VK_PIPELINE_STAGE_2_GEOMETRY_SHADER_BIT |
+      VK_PIPELINE_STAGE_2_PRE_RASTERIZATION_SHADERS_BIT |
+      VK_PIPELINE_STAGE_2_TRANSFORM_FEEDBACK_BIT_EXT;
+   const VkPipelineStageFlags2 fragment =
+      VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
+      VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+      VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT |
+      VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+   const VkPipelineStageFlags2 none = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT |
+                                      VK_PIPELINE_STAGE_2_HOST_BIT;
+
+   if (src & ~(geometry | fragment | none | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT))
+      return MTL_STAGE_ALL;
+
+   enum mtl_stages stages = 0;
+   if (src & geometry)
+      stages |= MTL_STAGE_VERTEX | MTL_STAGE_OBJECTS | MTL_STAGE_MESH |
+                MTL_STAGE_DISPATCH;
+   if (src & fragment)
+      stages |= MTL_STAGE_FRAGMENT | MTL_STAGE_TILE;
+   if (src & VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT)
+      stages |= MTL_STAGE_DISPATCH | MTL_STAGE_BLIT;
+   return stages;
+}
+
+void
+kk_cmd_track_vertex_dependencies(struct kk_cmd_buffer *cmd,
+                                 const VkDependencyInfo *dep)
+{
+   const VkPipelineStageFlags2 vertex =
+      VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT |
+      VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT |
+      VK_PIPELINE_STAGE_2_INDEX_INPUT_BIT |
+      VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT |
+      VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT |
+      VK_PIPELINE_STAGE_2_TESSELLATION_CONTROL_SHADER_BIT |
+      VK_PIPELINE_STAGE_2_TESSELLATION_EVALUATION_SHADER_BIT |
+      VK_PIPELINE_STAGE_2_GEOMETRY_SHADER_BIT |
+      VK_PIPELINE_STAGE_2_PRE_RASTERIZATION_SHADERS_BIT |
+      VK_PIPELINE_STAGE_2_TRANSFORM_FEEDBACK_BIT_EXT |
+      VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT |
+      VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT |
+      VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT;
+   enum mtl_stages *wait = &cmd->metal.segment.vertex_wait;
+
+   for (uint32_t i = 0; i < dep->memoryBarrierCount; i++) {
+      if (dep->pMemoryBarriers[i].dstStageMask & vertex)
+         *wait |= kk_vertex_wait_stages(dep->pMemoryBarriers[i].srcStageMask);
+   }
+   for (uint32_t i = 0; i < dep->bufferMemoryBarrierCount; i++) {
+      if (dep->pBufferMemoryBarriers[i].dstStageMask & vertex)
+         *wait |=
+            kk_vertex_wait_stages(dep->pBufferMemoryBarriers[i].srcStageMask);
+   }
+   for (uint32_t i = 0; i < dep->imageMemoryBarrierCount; i++) {
+      if (dep->pImageMemoryBarriers[i].dstStageMask & vertex)
+         *wait |=
+            kk_vertex_wait_stages(dep->pImageMemoryBarriers[i].srcStageMask);
+   }
+}
+
 static void
 kk_cmd_track_barriers(struct kk_cmd_buffer *cmd, const VkDependencyInfo *dep)
 {
@@ -111,6 +183,8 @@ kk_cmd_track_barriers(struct kk_cmd_buffer *cmd, const VkDependencyInfo *dep)
       VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT |
       VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
       VK_ACCESS_2_MEMORY_WRITE_BIT;
+
+   kk_cmd_track_vertex_dependencies(cmd, dep);
 
    for (uint32_t i = 0; i < dep->memoryBarrierCount; i++) {
       if (dep->pMemoryBarriers[i].srcAccessMask & attachment_write)

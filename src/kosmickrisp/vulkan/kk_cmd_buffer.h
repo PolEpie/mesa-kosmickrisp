@@ -162,6 +162,7 @@ struct kk_cmd_segment {
    struct kk_merge_key key;
    bool break_before;
    bool break_after;
+   enum mtl_stages vertex_wait;
 };
 
 #define KK_MAX_PENDING_BARRIER_IMAGES 16
@@ -459,6 +460,9 @@ void kk_dispatch_precomp(struct kk_cmd_buffer *cmd, struct kk_grid grid,
 #define MESA_DISPATCH_PRECOMP kk_dispatch_precomp
 
 void kk_cmd_write(struct kk_cmd_buffer *cmd, struct libkk_imm_write write);
+
+void kk_cmd_track_vertex_dependencies(struct kk_cmd_buffer *cmd,
+                                      const VkDependencyInfo *dep);
 
 void kk_cmd_buffer_set_label(struct kk_cmd_buffer *cb, const char *label);
 
