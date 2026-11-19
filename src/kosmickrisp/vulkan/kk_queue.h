@@ -39,6 +39,7 @@ struct kk_queue {
    /* Orders the vertex stage of merged render passes after earlier work, see
     * kk_queue_merge_wait */
    mtl_fence *merge_fence;
+   enum mtl_stages vertex_wait;
    mtx_t mutex;
    cnd_t cond;
 };
